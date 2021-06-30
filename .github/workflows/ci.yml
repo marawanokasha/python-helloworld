@@ -2,11 +2,19 @@ name: CI Build
 on: [push]
 jobs:
 
-  test:
+  test-and-coverage:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [3.6, 3.7, 3.8]
     steps:
       - name: checkout
         uses: actions/checkout@v2
+
+      - name: Setup Python
+        uses: actions/setup-python@master
+        with:
+          python-version: ${{ matrix.python-version }}
 
       - name: install requirements
         shell: bash
@@ -34,7 +42,8 @@ jobs:
           files: pytest_results.xml
           fail_on: "test failures"
       
-      - uses: 5monkeys/cobertura-action@master
+      - name: Publish Coverage results
+        uses: 5monkeys/cobertura-action@master
         with:
           path: coverage.xml
           repo_token: ${{ secrets.GITHUB_TOKEN }}
@@ -44,32 +53,25 @@ jobs:
           fail_below_threshold: true
           skip_covered: false
 
-      - name: Upload Pytest Results
+      - name: Upload Unit Test Results Artifact
         if: always()
         uses: actions/upload-artifact@v2
         with:
-          name: Unit Test Results HTML
+          name: Unit Test Results HTML - Python ${{ matrix.python-version }}
           path: pytest_results.html
 
-      - name: Upload Coverage Results
+      - name: Upload Coverage Results Artifact
         if: always()
         uses: actions/upload-artifact@v2
         with:
-          name: Coverage Results
+          name: Coverage Results - Python ${{ matrix.python-version }}
           path: coverage_html
-
-      - name: Upload Unit Test Results
-        if: always()
-        uses: actions/upload-artifact@v2
-        with:
-          name: Unit Test Results
-          path: pytest_results.*
 
   docker-build-and-push-old-fashioned:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
     needs: 
-      - test
+      - test-and-coverage
     strategy:
       matrix:
         platform: ["linux/amd64", "linux/arm64"]
@@ -101,7 +103,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
     needs: 
-      - test
+      - test-and-coverage
     steps:
 
       # this is the virtualization layer, allowing us to use pip install on arm64, otherwise we would get an error
