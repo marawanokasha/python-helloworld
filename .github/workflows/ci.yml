@@ -1,0 +1,125 @@
+name: CI Build
+on: [push]
+jobs:
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v2
+
+      - name: install requirements
+        shell: bash
+        run: |
+          python --version
+          pip install -r test/requirements.txt
+      
+      - name: run-tests
+        shell: bash
+        run: |
+          pytest --junitxml=pytest_results.xml --html=pytest_results.html --self-contained-html
+      
+      - name: coverage
+        shell: bash
+        run: |
+          coverage run -m pytest
+          coverage report -m
+          coverage html -d coverage_html
+          coverage xml
+          
+      - name: Publish Unit Test Results
+        uses: EnricoMi/publish-unit-test-result-action@v1
+        if: always()
+        with:
+          files: pytest_results.xml
+          fail_on: "test failures"
+      
+      - uses: 5monkeys/cobertura-action@master
+        with:
+          path: coverage.xml
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          show_line: true
+          show_missing: true
+          minimum_coverage: 60
+          fail_below_threshold: true
+          skip_covered: false
+
+      - name: Upload Pytest Results
+        if: always()
+        uses: actions/upload-artifact@v2
+        with:
+          name: Unit Test Results HTML
+          path: pytest_results.html
+
+      - name: Upload Coverage Results
+        if: always()
+        uses: actions/upload-artifact@v2
+        with:
+          name: Coverage Results
+          path: coverage_html
+
+      - name: Upload Unit Test Results
+        if: always()
+        uses: actions/upload-artifact@v2
+        with:
+          name: Unit Test Results
+          path: pytest_results.*
+
+  docker-build-and-push-old-fashioned:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    needs: 
+      - test
+    strategy:
+      matrix:
+        platform: ["linux/amd64", "linux/arm64"]
+    steps:
+      
+      # this is the virtualization layer, allowing us to use pip install on arm64, otherwise we would get an error
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v1
+
+      - name: checkout
+        uses: actions/checkout@v2
+
+      - name: docker build
+        run: |
+          docker buildx build -t python-helloworld:latest --platform ${{ matrix.platform }} ${{ github.workspace }}
+
+      - name: docker push
+        env:
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+          DOCKER_REPO: marawanokasha
+        run: |
+          docker tag python-helloworld:latest $DOCKER_REPO/python-helloworld:latest
+          echo "$DOCKER_PASSWORD" | docker login --username $DOCKER_USERNAME --password-stdin
+          docker push $DOCKER_REPO/python-helloworld:latest
+          docker logout
+
+  docker-build-and-push-buildx-plugin:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    needs: 
+      - test
+    steps:
+
+      # this is the virtualization layer, allowing us to use pip install on arm64, otherwise we would get an error
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
+        
+      - name: Login to DockerHub
+        uses: docker/login-action@v1 
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_ACCESS_TOKEN }}
+      
+      - name: Build and push
+        uses: docker/build-push-action@v2
+        with:
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: marawanokasha/python-helloworld:latest
